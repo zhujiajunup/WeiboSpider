@@ -5,7 +5,7 @@
 - 代码很烂，逻辑很乱，欢迎吐槽，欢迎交流。
 ## 微博登录获取cookie
 1. 使用selenium自动化登录，先在weibo.com登录，在跳转到weibo.cn（实现电脑端->手机端cookies的转换，cn页面解析起来更方便）
-2. 验证码使用了[yundama](www.yundama.com),具体使用看官网介绍
+2. 验证码使用了[云打码](http://www.yundama.com),具体使用看官网介绍
 3. cookies保存在redis
 4. 微博账号购买传送门,买那个一块钱12个就可以了（[http://www.onini.cn/bxfehnqv](http://www.onini.cn/bxfehnqv)）
 ## 微博抓取
