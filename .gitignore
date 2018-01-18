@@ -2,7 +2,6 @@
 data/*
 .idea/
 __pycache__/
-conf/
-img/
+conf/weibo.yaml
 target/
 config/
