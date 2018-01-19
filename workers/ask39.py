@@ -13,8 +13,12 @@ async def fetch(session, url):
             return await response.text()
 
 async def parse_question(session, url):
+    print(url)
     html = await fetch(session, url)
     html = BeautifulSoup(html, 'lxml')
+    title = html.find('title').get_text()
+    if title.endswith('页面不存在'):
+        return None
     ask_cont = html.find('div', class_='ask_cont')
     ask_hid = ask_cont.find('div', class_='ask_hid').find('p').get_text(";")
     txt_label = ask_cont.find('p', class_='txt_label')
@@ -23,7 +27,11 @@ async def parse_question(session, url):
     for label in labels:
         lbs.append(label.get_text())
     selected = html.find('div', class_='selected')
-    sele_img = selected.find('p', 'sele_img').get_text()
+    sele_img = selected.find('p', 'sele_img')
+    if sele_img:
+        sele_img = sele_img.get_text()
+    else:
+        sele_img = selected.find('p', 'answe1').get_text()
     
     answers = answer_cnt_pattern.findall(sele_img)
     first_doctor = selected.find('div', class_='doc_img').find('a').get('href')
@@ -34,13 +42,19 @@ async def parse_question(session, url):
     # print(answers[0])
     # print(first_doctor)
     return (url.strip(), ask_hid.strip(), ';'.join(lbs), answers[0], first_doctor.strip())
-    
+
+async def test():
+    async with aiohttp.ClientSession() as session:
+        html = await fetch(session, 'http://ask.39.net/question/52945721.html')
+        html = BeautifulSoup(html, 'lxml')
+        
+        print()
 
 
 async def main():
     details = []
     async with aiohttp.ClientSession() as session:
-        for i in range(1, 2):
+        for i in range(1, 200):
             html = await fetch(session, 'http://ask.39.net/news/237-%d.html' % i)
             html = BeautifulSoup(html, 'lxml')
 
@@ -51,7 +65,8 @@ async def main():
             for li in ask_lis:
                 detail = await parse_question(session, host + li.find('a').get('href'))
                 print(detail)
-                details.append(detail)
+                if detail:
+                    details.append(detail)
                 # print(html)
     with open('questions.csv', 'a', newline='') as f:
         f_csv = csv.writer(f)
