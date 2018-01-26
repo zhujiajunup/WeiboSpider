@@ -359,7 +359,7 @@ class WeiboCnSpider:
 
     @staticmethod
     async def grab_html2(session, url):
-        with async_timeout.timeout(60):
+        with async_timeout.timeout(120):
             async with session.get(url, verify_ssl=False) as response:
                 return await response.text()
 
@@ -456,6 +456,7 @@ class WeiboCnSpider:
                             if len(others) == 2:
                                 tweet['source'] = others[1]
                         tweet['uid'] = tweet_user_id
+                        await self.redis_job.push_job(JobType.user.value, {'user_id': tweet_user_id})
                         await self.weibo_producer.send(tweet, comment_job['url'])
 
             page_div = comment_html.find(id='pagelist')
