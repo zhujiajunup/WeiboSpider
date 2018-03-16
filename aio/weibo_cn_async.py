@@ -77,6 +77,8 @@ class WeiboCnSpider:
 
                 try:
                     await self.grab_follow(follow_dict)
+                except TimeoutError as e:
+                    pass
                 except:
                     LOGGER.error(traceback.format_exc())
                     sleep(5 * 60)
@@ -119,6 +121,8 @@ class WeiboCnSpider:
                 try:
                     # asyncio.run_coroutine_threadsafe(self.grab_tweet_comments(comment_job_info), self.loop)
                     await self.grab_tweet_comments(comment_job_info)
+                except TimeoutError as e:
+                    pass
                 except:
                     LOGGER.error("something error")
                     LOGGER.error(traceback.format_exc())
@@ -130,6 +134,8 @@ class WeiboCnSpider:
             if repost_job_info:
                 try:
                     await self.grab_tweet_repost(repost_job_info)
+                except TimeoutError as e:
+                    pass
                 except:
                     LOGGER.error("something error")
                     LOGGER.error(traceback.format_exc())
@@ -164,6 +170,8 @@ class WeiboCnSpider:
             if search_job_info:
                 try:
                     await self.search_tweet(search_job_info)
+                except TimeoutError as e:
+                    pass
                 except:
                     LOGGER.error(traceback.format_exc())
                     sleep(5 * 60)
@@ -184,6 +192,8 @@ class WeiboCnSpider:
                     #                                'uid': user_job_info['user_id']})
                     # self.weibo_queue.put({'url': self.user_tweet_url % user_id, 'uid': user_id})
                     # self.follow_queue.put({'uid': user_id, 'url': self.follow_url % user_id})
+                except TimeoutError as e:
+                    pass
                 except:
                     LOGGER.error(traceback.format_exc())
                     sleep(5 * 60)
@@ -654,6 +664,8 @@ class WeiboCnSpider:
             workers += [asyncio.Task(self.crawl_weibo(), loop=self.loop) for _ in range(self.tasks)]
         if 'r' in args:
             workers += [asyncio.Task(self.crawl_repost(), loop=self.loop) for _ in range(self.tasks)]
+        if 's' in args:
+            workers += [asyncio.Task(self.search(), loop=self.loop) for _ in range(self.tasks)]
         if workers:
             self.loop.run_until_complete(asyncio.wait(workers))
 
