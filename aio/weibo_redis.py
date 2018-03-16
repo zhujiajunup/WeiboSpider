@@ -40,7 +40,7 @@ class RedisJob(object):
         if not self._pool:
             await self.init_pool()
         with await self._pool as conn:
-            job_info = await conn.execute('lpop', job_type)
+            job_info = await conn.execute('rpop', job_type)
             if job_info:
                 LOGGER.info('fetched job: %s' % job_info)
                 return json.loads(job_info)
