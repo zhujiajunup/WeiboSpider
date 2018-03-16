@@ -40,6 +40,7 @@ class JobType(Enum):
     follower = 'follower'
     user = 'user'
     repost = 'repost'
+    search = 'search'
 
 
 class WeiboCnSpider:
@@ -66,6 +67,8 @@ class WeiboCnSpider:
         self.tweet_comment_url = self.weibo_host + '/comment/%s'
         self.tweet_comment_url2 = self.weibo_host + '/comment/%s?page=%d'
         self.weibo_producer = WeiboProcuder(['localhost:9092'], 'sinaweibo')
+        self.search_url = 'https://weibo.cn/search/?pos=search'
+        self.get_search_url = 'https://weibo.cn/search/mblog/?keyword=%s&filter=hasori'
 
     async def crawl_follow(self):
         while True:
@@ -121,6 +124,17 @@ class WeiboCnSpider:
                     LOGGER.error(traceback.format_exc())
                     sleep(5 * 60)
 
+    async def crawl_repost(self):
+        while True:
+            repost_job_info = await self.redis_job.fetch_job(JobType.repost.value)
+            if repost_job_info:
+                try:
+                    await self.grab_tweet_repost(repost_job_info)
+                except:
+                    LOGGER.error("something error")
+                    LOGGER.error(traceback.format_exc())
+                    sleep(5 * 60)
+
     async def crawl_weibo(self):
         r = re.compile(r'https://weibo.cn/(\d*)\?page=(\d*)')
         while True:
@@ -144,6 +158,16 @@ class WeiboCnSpider:
                     LOGGER.error(traceback.format_exc())
                     sleep(5 * 60)
 
+    async def search(self):
+        while True:
+            search_job_info = await self.redis_job.fetch_job(JobType.search.value)
+            if search_job_info:
+                try:
+                    await self.search_tweet(search_job_info)
+                except:
+                    LOGGER.error(traceback.format_exc())
+                    sleep(5 * 60)
+
     async def crawl_user(self):
         while True:
             user_job_info = await self.redis_job.fetch_job(JobType.user.value)
@@ -163,6 +187,97 @@ class WeiboCnSpider:
                 except:
                     LOGGER.error(traceback.format_exc())
                     sleep(5 * 60)
+
+    async def search_tweet(self, search_job_info):
+        html_content = await self.grab_html(search_job_info['url'])
+
+        result_html = BeautifulSoup(html_content, "lxml")
+        if 'page' not in search_job_info['url']:
+            total_count_str = result_html.find(text=re.compile(r'共\d*条'))
+            print(total_count_str)
+            total_count_result = re.findall(r'共(\d*)条', total_count_str)
+            if total_count_result:
+                total_count = total_count_result[0]
+                total_page = int(total_count) / 10
+                for page_no in range(2, int(total_page)):
+                    await self.redis_job.push_job(JobType.search.value, {
+                        'url': search_job_info['url'] + '&page=' + str(page_no)
+                    })
+
+        tweet_divs = result_html.find_all(id=True, class_='c')
+        for tweet_div in tweet_divs:
+            tweet = {}
+            nk_div = tweet_div.find('a', class_='nk')
+            if nk_div:
+                nk_url = nk_div.get('href')
+                usr_id_result = self.user_id_pattern.findall(nk_url)
+                if usr_id_result:
+                    usr_id = usr_id_result[0]
+                else:
+                    usr_id = await self.get_user_id_from_homepage(nk_url)
+            else:
+                usr_id = 'unknown'
+            if tweet_div.find(class_='cmt', string='转发理由:'):  # 转发
+                tweet['flag'] = '转发'
+                parent = tweet_div.find(class_='cmt', string='转发理由:').parent
+                try:
+                    comment_href = tweet_div.find_all('div')[-2].find('a', class_='cc').get('href')
+
+                    href = comment_href.split('?')[0]
+                    tweet['sourceTid'] = href.split('/')[-1]
+
+                except Exception:
+                    pass
+                text = parent.get_text()
+                fields = text.split('\xa0')
+
+                content = fields[0][5:]
+                ct_content = parent.find('span', class_='ct').get_text()
+                time_source = ct_content.split('\u6765\u81ea')
+
+                time = time_source[0]
+                if len(time_source) == 2:
+                    source = time_source[1]
+                else:
+                    source = 'unknown'
+                other = ';'.join(fields[1:])
+
+            else:
+                tweet['flag'] = '原创'
+                text = tweet_div.get_text()
+                ct_content = tweet_div.find('span', class_='ct').get_text()
+                time_source = ct_content.split('\u6765\u81ea')
+
+                time = time_source[0]
+                if len(time_source) == 2:
+                    source = time_source[1]
+                else:
+                    source = 'unknown'
+                fields = text.split('\u200b')
+                content = fields[0]
+                other_fields = fields[-1].split('\xa0')
+                other = ';'.join(other_fields[1:])
+
+            like = re.findall(u'\u8d5e\[(\d+)\];', other)  # 点赞数
+            transfer = re.findall(u'\u8f6c\u53d1\[(\d+)\];', other)  # 转载数
+            comment = re.findall(u'\u8bc4\u8bba\[(\d+)\];', other)  # 评论数
+            tweet['content'] = content.strip()
+            tweet['id'] = tweet_div.get('id').strip('M_')
+            tweet['time'] = self.get_time(str(time))
+            tweet['source'] = source
+            tweet['like'] = like[0] if like else -1
+            tweet['transfer'] = transfer[0] if transfer else -1
+            tweet['comment'] = comment[0] if comment else -1
+            tweet['type'] = 'tweet_info'
+            tweet['uid'] = usr_id
+            print(tweet)
+            await self.weibo_producer.send(tweet, search_job_info['url'])
+            await self.redis_job.push_job(JobType.tweet.value,
+                                          {'url': self.user_tweet_url % tweet['id'],
+                                           'uid': usr_id})
+            await self.redis_job.push_job(JobType.comment.value,
+                                          {'url': self.tweet_comment_url % tweet['id'],
+                                           'tweetId': tweet['id']})
 
     async def grab_user_tweet(self, tweet_job_info):
         LOGGER.info('start grab tweet: %s' % str(tweet_job_info))
@@ -216,7 +331,7 @@ class WeiboCnSpider:
             like = re.findall(u'\u8d5e\[(\d+)\];', other)  # 点赞数
             transfer = re.findall(u'\u8f6c\u53d1\[(\d+)\];', other)  # 转载数
             comment = re.findall(u'\u8bc4\u8bba\[(\d+)\];', other)  # 评论数
-            tweet['content'] = content
+            tweet['content'] = content.strip()
             tweet['id'] = tweet_div.get('id')
             tweet['time'] = self.get_time(str(time))
             tweet['source'] = source
@@ -232,18 +347,6 @@ class WeiboCnSpider:
             #                         'tweetId': tweet['id'][2:]})
 
         if 'page=' not in tweet_job_info['url']:
-
-            # total_weibo_span = user_tweet_html.find('span', class_='tc')
-            # if total_weibo_span:
-            #     total_result = re.findall('微博\[(\d*)\]', total_weibo_span.get_text())
-            #     if total_result:
-            #         total = total_result[0]
-            #         if int(total) > 5000:
-            #             return
-            #     else:
-            #         return
-            # else:
-            #     return
             page_div = user_tweet_html.find(id='pagelist')
             if page_div:
                 max_page = int(page_div.input.get('value'))
@@ -363,6 +466,16 @@ class WeiboCnSpider:
             async with session.get(url, verify_ssl=False) as response:
                 return await response.text()
 
+    async def post_grab2(self, session, url, data):
+        with async_timeout.timeout(2 * 60):
+            async with session.post(url=url, data=data, verify_ssl=False) as response:
+                return await response.text()
+
+    async def post_grab(self, url, data):
+        cookies = await self.redis_cookie.fetch_cookies()
+        async with aiohttp.ClientSession(cookies=cookies['cookies']) as session:
+            return await self.post_grab2(session, url, data)
+
     async def grab_html(self, url):
         cookies = await self.redis_cookie.fetch_cookies()
         async with aiohttp.ClientSession(cookies=cookies['cookies']) as session:
@@ -384,6 +497,108 @@ class WeiboCnSpider:
             # LOGGER.info('id got: %s' % user_id)
             return user_id
         return 0
+
+    async def parse_tweet_content(self, html, job_info):
+        tweet_div = html.find(id='M_', class_='c')
+        if tweet_div:
+            tweet_user_a = tweet_div.find('a')
+            flag = False
+            if tweet_user_a:
+                tweet = {}
+                tweet_user_href = tweet_user_a.get('href')
+                if tweet_user_href.startswith('/u/'):
+                    tweet_user_id = tweet_user_href[3:]
+                else:
+                    tweet_user_id = await self.get_user_id_from_homepage(self.weibo_host + tweet_user_href)
+                await self.user_id_in_queue(tweet_user_id)
+                if tweet_div.find(class_='cmt', string='转发理由:'):
+                    tweet['flag'] = '转发'
+                    parent = tweet_div.find(class_='cmt', string='转发理由:').parent
+                    try:
+                        comment_href = tweet_div.find_all('div')[-2].find('a', class_='cc').get('href')
+
+                        href = comment_href.split('?')[0]
+                        tweet['sourceTid'] = href.split('/')[-1]
+
+                    except Exception:
+                        pass
+                    text = parent.get_text()
+                    fields = text.split('\xa0')
+                    flag = True
+                    content = fields[0][5:]
+                    tweet['content'] = content.strip()
+                    # ct_content = parent.find('span', class_='ct').get_text()
+                    # time_source = ct_content.split('\u6765\u81ea')
+                    #
+                    # time = time_source[0]
+                    # if len(time_source) == 2:
+                    #     source = time_source[1]
+                    # else:
+                    #     source = 'unknown'
+                    # other = ';'.join(fields[1:])
+                else:
+                    tweet_content = tweet_div.find('span', class_='ctt').get_text()
+                    tweet['content'] = tweet_content.strip()
+                tweet_details = list(
+                    filter(lambda div: div.find(class_='pms'),
+                           html.find_all('div', id=False, class_=False)))
+                tweet['sourceTid'] = job_info['parentTid'] if 'parentTid' in job_info \
+                    else tweet['sourceTid'] if flag else ''
+                detail = tweet_details[0].get_text(';').replace('\xa0', '')
+                like = re.findall(u'\u8d5e\[(\d+)\];', detail)  # 点赞数
+                transfer = re.findall(u'\u8f6c\u53d1\[(\d+)\];', detail)  # 转载数
+                comment = re.findall(u'\u8bc4\u8bba\[(\d+)\];', detail)  # 评论数
+                tweet['id'] = job_info['tweetId']
+                tweet['like'] = like[0] if like else 0
+                tweet['transfer'] = transfer[0] if transfer else 0
+                tweet['comment'] = comment[0] if comment else 0
+                tweet['type'] = 'tweet_info'
+                # if flag:
+                #     await self.weibo_producer.send(tweet, job_info['url'])
+                # else:
+                others = tweet_div.find(class_='ct').get_text()
+                if others:
+                    others = others.split('\u6765\u81ea')
+                    tweet['time'] = self.get_time(others[0])
+                    if len(others) == 2:
+                        tweet['source'] = others[1]
+                tweet['uid'] = tweet_user_id
+                await self.weibo_producer.send(tweet, job_info['url'])
+                return tweet
+        return None
+
+    async def grab_tweet_repost(self, repost_job_info):
+        LOGGER.info('start grab tweet repost: %s' % str(repost_job_info))
+
+        html_content = await self.grab_html(repost_job_info['url'])
+        tweet_repost_html = BeautifulSoup(html_content, "lxml")
+        repost_divs = tweet_repost_html.find_all(class_='c')
+        for div in repost_divs:
+            span_cc = div.find('span', class_='cc')
+            if span_cc:
+                attitube_a = span_cc.find('a')
+                if attitube_a:
+                    href = attitube_a.get('href')
+                    if len(href.split('/')) > 2:
+                        await self.redis_job.push_job(JobType.comment.value,
+                                                      {'url': self.tweet_comment_url % href.split('/')[2],
+                                                       'tweetId': href.split('/')[2],
+                                                       'parentTid': repost_job_info['tweetId']})
+                        await self.redis_job.push_job(JobType.repost.value,
+                                                      {'url': self.user_repost_url % href.split('/')[2],
+                                                       'tweetId': href.split('/')[2],
+                                                       'parentTid': repost_job_info['tweetId']})
+        if 'page=' not in repost_job_info['url']:
+            await self.parse_tweet_content(tweet_repost_html, repost_job_info)
+            page_div = tweet_repost_html.find(id='pagelist')
+            if page_div:
+
+                max_page = int(page_div.input.get('value'))
+                for page in range(2, max_page + 1):
+                    await self.redis_job.push_job(JobType.repost.value,
+                                                  {'url': self.user_repost_url2 % (repost_job_info['tweetId'], page),
+                                                   'tweetId': repost_job_info['tweetId']})
+        pass
 
     async def grab_tweet_comments(self, comment_job):
         LOGGER.info('start grab comment: %s' % str(comment_job))
@@ -416,48 +631,7 @@ class WeiboCnSpider:
                 await self.weibo_producer.send(comment_info, comment_job['url'])
 
         if 'page=' not in comment_job['url']:
-            self.redis_job.push_job(JobType.repost.value, {'url': self.user_repost_url % comment_job['tweetId'],
-                                                           'tweetId': comment_job['tweetId']})
-            tweet_div = comment_html.find(id='M_', class_='c')
-            if tweet_div:
-                tweet_user_a = tweet_div.find('a')
-                flag = False
-                if tweet_user_a:
-                    tweet = {}
-                    tweet_user_href = tweet_user_a.get('href')
-                    if tweet_user_href.startswith('/u/'):
-                        tweet_user_id = tweet_user_href[3:]
-                    else:
-                        tweet_user_id = await self.get_user_id_from_homepage(self.weibo_host + tweet_user_href)
-                    if tweet_div.find(class_='cmt', string='转发理由:'):
-                        flag = True
-                    else:
-                        tweet_content = tweet_div.find('span', class_='ctt').get_text()
-                        tweet['content'] = tweet_content
-                    tweet_details = list(
-                        filter(lambda div: div.find(class_='pms'),
-                               comment_html.find_all('div', id=False, class_=False)))
-                    detail = tweet_details[0].get_text(';').replace('\xa0', '')
-                    like = re.findall(u'\u8d5e\[(\d+)\];', detail)  # 点赞数
-                    transfer = re.findall(u'\u8f6c\u53d1\[(\d+)\];', detail)  # 转载数
-                    comment = re.findall(u'\u8bc4\u8bba\[(\d+)\];', detail)  # 评论数
-                    tweet['id'] = comment_job['tweetId']
-                    tweet['like'] = like[0] if like else 0
-                    tweet['transfer'] = transfer[0] if transfer else 0
-                    tweet['comment'] = comment[0] if comment else 0
-                    tweet['type'] = 'tweet_info'
-                    if flag:
-                        await self.weibo_producer.send(tweet, comment_job['url'])
-                    else:
-                        others = tweet_div.find(class_='ct').get_text()
-                        if others:
-                            others = others.split('\u6765\u81ea')
-                            tweet['time'] = self.get_time(others[0])
-                            if len(others) == 2:
-                                tweet['source'] = others[1]
-                        tweet['uid'] = tweet_user_id
-                        await self.weibo_producer.send(tweet, comment_job['url'])
-
+            await self.parse_tweet_content(comment_html, comment_job)
             page_div = comment_html.find(id='pagelist')
             if page_div:
 
@@ -478,7 +652,8 @@ class WeiboCnSpider:
             workers += [asyncio.Task(self.crawl_user(), loop=self.loop) for _ in range(self.tasks)]
         if 'w' in args:
             workers += [asyncio.Task(self.crawl_weibo(), loop=self.loop) for _ in range(self.tasks)]
-
+        if 'r' in args:
+            workers += [asyncio.Task(self.crawl_repost(), loop=self.loop) for _ in range(self.tasks)]
         if workers:
             self.loop.run_until_complete(asyncio.wait(workers))
 
@@ -486,6 +661,6 @@ class WeiboCnSpider:
 if __name__ == '__main__':
     args = sys.argv[1:]
     LOGGER.info(args)
-    WeiboCnSpider(tasks=5).start(args)
+    WeiboCnSpider(tasks=2).start(args)
     # loop = asyncio.get_event_loop()
     # loop.run_until_complete()

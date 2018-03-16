@@ -9,7 +9,7 @@ from pybloom import ScalableBloomFilter
 
 
 class RedisJob(object):
-    redis_pool = redis.ConnectionPool(host='localhost', port=6379, db=1)
+    redis_pool = redis.ConnectionPool(host='localhost', port=6378, db=1)
     url_filter = ScalableBloomFilter(mode=ScalableBloomFilter.SMALL_SET_GROWTH)
 
     @classmethod
@@ -40,7 +40,7 @@ class RedisJob(object):
 
 
 class RedisCookies(object):
-    redis_pool = redis.ConnectionPool(host='localhost', port=6379, db=0)
+    redis_pool = redis.ConnectionPool(host='localhost', port=6378, db=0)
 
     @classmethod
     def save_cookies(cls, user_name, cookies):

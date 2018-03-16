@@ -11,7 +11,7 @@ class RedisJob(object):
     url_filter = ScalableBloomFilter(mode=ScalableBloomFilter.SMALL_SET_GROWTH)
 
     def __init__(self, **kwargs):
-        self._host = kwargs['host'] if 'host' in kwargs else 'redis://localhost:6379'
+        self._host = kwargs['host'] if 'host' in kwargs else 'redis://localhost:6378'
         self._db = kwargs['db'] if 'db' in kwargs else 1
         self._minsize = kwargs['minsize'] if 'minsize' in kwargs else 5
         self._maxsize = kwargs['maxsize'] if 'maxsize' in kwargs else 10
@@ -47,12 +47,21 @@ class RedisJob(object):
             else:
                 return None
 
+    async def clean(self):
+        if not self._pool:
+            await self.init_pool()
+        with await self._pool as conn:
+            keys = await conn.execute('keys', '*')
+            for key in keys:
+                LOGGER.info("del %s" % key)
+                await conn.execute('del', key)
+
 
 class RedisCookie(object):
     _pool = None
 
     def __init__(self, **kwargs):
-        self._host = kwargs['host'] if 'host' in kwargs else 'redis://localhost:6379'
+        self._host = kwargs['host'] if 'host' in kwargs else 'redis://localhost:6378'
         self._db = kwargs['db'] if 'db' in kwargs else 0
         self._minsize = kwargs['minsize'] if 'minsize' in kwargs else 5
         self._maxsize = kwargs['maxsize'] if 'maxsize' in kwargs else 10
