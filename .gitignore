@@ -5,3 +5,4 @@ __pycache__/
 conf/weibo.yaml
 target/
 config/
+img/*
